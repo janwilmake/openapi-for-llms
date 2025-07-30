@@ -137,7 +137,7 @@ function createSubset(openapi, paths, operationFilter = null) {
 /**
  * Generate llms.txt content according to spec
  */
-function generateLlmsTxt(openapi) {
+function generateLlmsTxt(openapi, openapiFile) {
   const operations = [];
   const tagOperations = new Map();
   const tagInfo = new Map();
@@ -264,6 +264,8 @@ function generateLlmsTxt(openapi) {
     content += details.join("\n\n") + "\n\n";
   }
 
+  content += `[Full OpenAPI Spec](${openapiFile})`;
+
   // Add sections for each tag (H2 headers)
   const sortedTags = Array.from(tagOperations.keys()).sort();
 
@@ -330,7 +332,7 @@ function generateLlmsTxt(openapi) {
 /**
  * Process OpenAPI document and generate all files
  */
-async function processOpenAPI(openapi) {
+async function processOpenAPI(openapi, openapiFile) {
   const files = {};
 
   try {
@@ -338,7 +340,7 @@ async function processOpenAPI(openapi) {
     const dereferenced = dereferenceSync(openapi);
 
     // Generate main llms.txt
-    files["llms.txt"] = { content: generateLlmsTxt(dereferenced) };
+    files["llms.txt"] = { content: generateLlmsTxt(dereferenced, openapiFile) };
 
     // Collect operations and tags
     const operations = [];
@@ -533,7 +535,7 @@ async function runCLI() {
   console.log(`Found ${openapiFile}, processing...`);
 
   // Process the OpenAPI document
-  const files = await processOpenAPI(openapiContent);
+  const files = await processOpenAPI(openapiContent, openapiFile);
 
   // Write all files
   for (const [filePath, fileData] of Object.entries(files)) {
