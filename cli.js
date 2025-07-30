@@ -6,6 +6,31 @@ import { dereferenceSync } from "@trojs/openapi-dereference";
 import { resolve } from "path";
 
 /**
+ * Fetch external documentation
+ */
+async function fetchExternalDocs(url) {
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "text/markdown, text/plain, */*",
+      },
+    });
+
+    if (!response.ok) {
+      console.warn(
+        `Failed to fetch external docs from ${url}: ${response.status}`
+      );
+      return null;
+    }
+
+    return await response.text();
+  } catch (error) {
+    console.warn(`Error fetching external docs from ${url}:`, error.message);
+    return null;
+  }
+}
+
+/**
  * Find referenced schemas in a JSON object
  */
 function findRefs(json, refs, refPrefix = "#/components/schemas/") {
@@ -110,13 +135,12 @@ function createSubset(openapi, paths, operationFilter = null) {
 }
 
 /**
- * Generate SLOP (overview) content
+ * Generate llms.txt content
  */
-function generateSlop(openapi) {
+function generateLlmsTxt(openapi) {
   const operations = [];
-  const tagGroups = {};
 
-  // Collect all operations and group by tags
+  // Collect all operations
   for (const [path, pathItem] of Object.entries(openapi.paths || {})) {
     if (!pathItem || typeof pathItem !== "object") continue;
 
@@ -138,93 +162,84 @@ function generateSlop(openapi) {
       const operationId =
         operation.operationId ||
         `${path.slice(1).replace(/[^a-zA-Z0-9]/g, "_")}_${method}`;
-      const tags = operation.tags || ["untagged"];
 
-      const operationInfo = {
+      operations.push({
         operationId,
         method: method.toUpperCase(),
         path,
-        summary: operation.summary || "",
-        description: operation.description || "",
-        tags,
-      };
-
-      operations.push(operationInfo);
-
-      // Group by tags
-      for (const tag of tags) {
-        if (!tagGroups[tag]) {
-          tagGroups[tag] = [];
-        }
-        tagGroups[tag].push(operationInfo);
-      }
+        summary: operation.summary || `${method.toUpperCase()} ${path}`,
+      });
     }
   }
 
-  // Generate SLOP content
-  let slop = `# ${openapi.info?.title || "API"} Operations\n\n`;
+  // Generate llms.txt content
+  let content = `# ${openapi.info?.title || "API"}\n\n`;
 
   if (openapi.info?.description) {
-    slop += `${openapi.info.description}\n\n`;
+    content += `${openapi.info.description}\n\n`;
   }
 
-  slop += `Version: ${openapi.info?.version || "unknown"}\n\n`;
-
-  // Add overview
-  slop += `## Overview\n\n`;
-  slop += `This API contains ${operations.length} operations`;
-
-  const tagCount = Object.keys(tagGroups).length;
-  if (tagCount > 1 || (tagCount === 1 && !tagGroups.untagged)) {
-    slop += ` grouped into ${tagCount} categories`;
-  }
-  slop += `.\n\n`;
-
-  // List operations by tag
-  for (const [tag, tagOperations] of Object.entries(tagGroups)) {
-    if (tag === "untagged" && Object.keys(tagGroups).length > 1) {
-      slop += `## Untagged Operations\n\n`;
-    } else if (tag !== "untagged") {
-      slop += `## ${tag}\n\n`;
-      slop += `[View ${tag} operations](tags/${tag}.yaml)\n\n`;
-    }
-
-    for (const op of tagOperations) {
-      slop += `### ${op.operationId}\n\n`;
-      slop += `**${op.method} ${op.path}**\n\n`;
-
-      if (op.summary) {
-        slop += `${op.summary}\n\n`;
-      }
-
-      if (op.description && op.description !== op.summary) {
-        slop += `${op.description}\n\n`;
-      }
-
-      slop += `[View operation details](operations/${op.operationId}.yaml)\n\n`;
-      slop += `---\n\n`;
-    }
+  if (openapi.info?.version) {
+    content += `**Version:** ${openapi.info.version}\n\n`;
   }
 
-  return slop;
+  if (
+    openapi.info?.contact?.name ||
+    openapi.info?.contact?.email ||
+    openapi.info?.contact?.url
+  ) {
+    content += `**Contact:**`;
+    if (openapi.info.contact.name) content += ` ${openapi.info.contact.name}`;
+    if (openapi.info.contact.email)
+      content += ` <${openapi.info.contact.email}>`;
+    if (openapi.info.contact.url) content += ` (${openapi.info.contact.url})`;
+    content += `\n\n`;
+  }
+
+  if (openapi.info?.license?.name) {
+    content += `**License:** ${openapi.info.license.name}`;
+    if (openapi.info.license.url) content += ` (${openapi.info.license.url})`;
+    content += `\n\n`;
+  }
+
+  if (openapi.servers && openapi.servers.length > 0) {
+    content += `**Base URL:** ${openapi.servers[0].url}\n\n`;
+  }
+
+  content += `## Operations\n\n`;
+
+  // List operations - one line per operation
+  for (const op of operations) {
+    content += `- **${op.method} ${op.path}** - ${op.summary} ([details](operations/${op.operationId}.yaml))\n`;
+  }
+
+  return content;
 }
 
 /**
  * Process OpenAPI document and generate all files
  */
-function processOpenAPI(openapi) {
+async function processOpenAPI(openapi) {
   const files = {};
 
   try {
     // Dereference the OpenAPI document for processing
     const dereferenced = dereferenceSync(openapi);
 
-    // Generate main SLOP
-    files["SLOP.md"] = { content: generateSlop(dereferenced) };
+    // Generate main llms.txt
+    files["llms.txt"] = { content: generateLlmsTxt(dereferenced) };
 
     // Collect operations and tags
     const operations = [];
     const tags = new Set();
+    const tagInfo = new Map();
+
+    // Collect tag information from the OpenAPI document
+    if (openapi.tags) {
+      for (const tag of openapi.tags) {
+        tagInfo.set(tag.name, tag);
+      }
+    }
 
     for (const [path, pathItem] of Object.entries(dereferenced.paths || {})) {
       if (!pathItem || typeof pathItem !== "object") continue;
@@ -258,6 +273,14 @@ function processOpenAPI(openapi) {
         });
 
         operationTags.forEach((tag) => tags.add(tag));
+
+        // Fetch external docs for operation if present
+        if (operation.externalDocs?.url) {
+          const docs = await fetchExternalDocs(operation.externalDocs.url);
+          if (docs) {
+            files[`operations/${operationId}-docs.md`] = { content: docs };
+          }
+        }
       }
     }
 
@@ -273,7 +296,7 @@ function processOpenAPI(openapi) {
       };
     }
 
-    // Generate tag files
+    // Generate tag files and fetch external docs
     for (const tag of tags) {
       const tagPaths = {};
 
@@ -311,6 +334,15 @@ function processOpenAPI(openapi) {
         files[`tags/${tag}.yaml`] = {
           content: dump(tagSubset, { noRefs: true, indent: 2 }),
         };
+
+        // Fetch external docs for tag if present
+        const tagData = tagInfo.get(tag);
+        if (tagData?.externalDocs?.url) {
+          const docs = await fetchExternalDocs(tagData.externalDocs.url);
+          if (docs) {
+            files[`tags/${tag}-docs.md`] = { content: docs };
+          }
+        }
       }
     }
 
@@ -362,7 +394,7 @@ function processOpenAPI(openapi) {
 /**
  * CLI functionality
  */
-function runCLI() {
+async function runCLI() {
   const cwd = process.cwd();
 
   // Look for OpenAPI file
@@ -390,7 +422,7 @@ function runCLI() {
   console.log(`Found ${openapiFile}, processing...`);
 
   // Process the OpenAPI document
-  const files = processOpenAPI(openapiContent);
+  const files = await processOpenAPI(openapiContent);
 
   // Write all files
   for (const [filePath, fileData] of Object.entries(files)) {
@@ -409,7 +441,7 @@ function runCLI() {
   console.log(
     `\nGenerated ${Object.keys(files).length} files from ${openapiFile}`
   );
-  console.log("Main overview available in SLOP.md");
+  console.log("Main overview available in llms.txt");
 }
 
 // Export the function for programmatic use
