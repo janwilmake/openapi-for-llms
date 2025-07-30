@@ -135,12 +135,25 @@ function createSubset(openapi, paths, operationFilter = null) {
 }
 
 /**
- * Generate llms.txt content
+ * Generate llms.txt content according to spec
  */
 function generateLlmsTxt(openapi) {
   const operations = [];
+  const tagOperations = new Map();
+  const tagInfo = new Map();
 
-  // Collect all operations
+  // Collect tag information from the OpenAPI document
+  if (openapi.tags) {
+    for (const tag of openapi.tags) {
+      tagInfo.set(tag.name, tag);
+      tagOperations.set(tag.name, []);
+    }
+  }
+
+  // Collect untagged operations
+  const untaggedOperations = [];
+
+  // Collect all operations and organize by tags
   for (const [path, pathItem] of Object.entries(openapi.paths || {})) {
     if (!pathItem || typeof pathItem !== "object") continue;
 
@@ -163,24 +176,53 @@ function generateLlmsTxt(openapi) {
         operation.operationId ||
         `${path.slice(1).replace(/[^a-zA-Z0-9]/g, "_")}_${method}`;
 
-      operations.push({
+      const operationData = {
         operationId,
         method: method.toUpperCase(),
         path,
         summary: operation.summary || `${method.toUpperCase()} ${path}`,
-      });
+        description: operation.description,
+        tags: operation.tags || [],
+      };
+
+      operations.push(operationData);
+
+      // Organize by tags
+      if (operation.tags && operation.tags.length > 0) {
+        for (const tag of operation.tags) {
+          if (!tagOperations.has(tag)) {
+            tagOperations.set(tag, []);
+          }
+          tagOperations.get(tag).push(operationData);
+        }
+      } else {
+        untaggedOperations.push(operationData);
+      }
     }
   }
 
-  // Generate llms.txt content
+  // Generate llms.txt content according to spec
   let content = `# ${openapi.info?.title || "API"}\n\n`;
 
+  // Required blockquote with summary
+  let summary = "";
   if (openapi.info?.description) {
-    content += `${openapi.info.description}\n\n`;
+    // Take first paragraph or sentence as summary
+    summary = openapi.info.description.split("\n")[0].split(".")[0] + ".";
+  } else {
+    summary = `API documentation for ${openapi.info?.title || "this service"}.`;
   }
+  content += `> ${summary}\n\n`;
+
+  // Optional details section
+  let details = [];
 
   if (openapi.info?.version) {
-    content += `**Version:** ${openapi.info.version}\n\n`;
+    details.push(`**Version:** ${openapi.info.version}`);
+  }
+
+  if (openapi.servers && openapi.servers.length > 0) {
+    details.push(`**Base URL:** ${openapi.servers[0].url}`);
   }
 
   if (
@@ -188,29 +230,98 @@ function generateLlmsTxt(openapi) {
     openapi.info?.contact?.email ||
     openapi.info?.contact?.url
   ) {
-    content += `**Contact:**`;
-    if (openapi.info.contact.name) content += ` ${openapi.info.contact.name}`;
+    let contactInfo = "**Contact:**";
+    if (openapi.info.contact.name)
+      contactInfo += ` ${openapi.info.contact.name}`;
     if (openapi.info.contact.email)
-      content += ` <${openapi.info.contact.email}>`;
-    if (openapi.info.contact.url) content += ` (${openapi.info.contact.url})`;
-    content += `\n\n`;
+      contactInfo += ` <${openapi.info.contact.email}>`;
+    if (openapi.info.contact.url)
+      contactInfo += ` (${openapi.info.contact.url})`;
+    details.push(contactInfo);
   }
 
   if (openapi.info?.license?.name) {
-    content += `**License:** ${openapi.info.license.name}`;
-    if (openapi.info.license.url) content += ` (${openapi.info.license.url})`;
-    content += `\n\n`;
+    let licenseInfo = `**License:** ${openapi.info.license.name}`;
+    if (openapi.info.license.url)
+      licenseInfo += ` (${openapi.info.license.url})`;
+    details.push(licenseInfo);
   }
 
-  if (openapi.servers && openapi.servers.length > 0) {
-    content += `**Base URL:** ${openapi.servers[0].url}\n\n`;
+  if (
+    openapi.info?.description &&
+    openapi.info.description.length > summary.length
+  ) {
+    // Add full description if it's longer than the summary
+    const fullDescription = openapi.info.description
+      .replace(summary, "")
+      .trim();
+    if (fullDescription) {
+      details.push(fullDescription);
+    }
   }
 
-  content += `## Operations\n\n`;
+  if (details.length > 0) {
+    content += details.join("\n\n") + "\n\n";
+  }
 
-  // List operations - one line per operation
-  for (const op of operations) {
-    content += `- **${op.method} ${op.path}** - ${op.summary} ([details](operations/${op.operationId}.yaml))\n`;
+  // Add sections for each tag (H2 headers)
+  const sortedTags = Array.from(tagOperations.keys()).sort();
+
+  for (const tag of sortedTags) {
+    const ops = tagOperations.get(tag);
+    if (ops.length === 0) continue;
+
+    const tagData = tagInfo.get(tag);
+    const sectionName = tagData?.name || tag;
+
+    content += `## ${sectionName}\n\n`;
+
+    // Add tag description if available
+    if (tagData?.description) {
+      content += `${tagData.description}\n\n`;
+    }
+
+    content += `- [${sectionName} operations](tags/${tag}.yaml) All '${sectionName}' operations in one file\n`;
+
+    // List operations for this tag
+    for (const op of ops) {
+      const linkText = `${op.method} ${op.path}`;
+      const linkUrl = `operations/${op.operationId}.yaml`;
+      let linkLine = `- [${linkText}](${linkUrl})`;
+
+      if (op.summary && op.summary !== `${op.method} ${op.path}`) {
+        linkLine += `: ${op.summary}`;
+      } else if (op.description) {
+        // Use first sentence of description if no summary
+        const firstSentence = op.description.split(".")[0] + ".";
+        linkLine += `: ${firstSentence}`;
+      }
+
+      content += linkLine + "\n";
+    }
+    content += "\n";
+  }
+
+  // Add untagged operations if any exist
+  if (untaggedOperations.length > 0) {
+    content += `## General\n\n`;
+    content += `- [General operations](tags/untagged.yaml) All untagged operations in one file\n`;
+
+    for (const op of untaggedOperations) {
+      const linkText = `${op.method} ${op.path}`;
+      const linkUrl = `operations/${op.operationId}.yaml`;
+      let linkLine = `- [${linkText}](${linkUrl})`;
+
+      if (op.summary && op.summary !== `${op.method} ${op.path}`) {
+        linkLine += `: ${op.summary}`;
+      } else if (op.description) {
+        const firstSentence = op.description.split(".")[0] + ".";
+        linkLine += `: ${firstSentence}`;
+      }
+
+      content += linkLine + "\n";
+    }
+    content += "\n";
   }
 
   return content;
@@ -449,5 +560,8 @@ export { processOpenAPI };
 
 // Run CLI if this file is executed directly
 if (process.argv[1] === new URL(import.meta.url).pathname) {
+  console.log("running cli");
   runCLI();
+} else {
+  console.log("no first argv", new URL(import.meta.url).pathname);
 }
