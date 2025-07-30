@@ -1,8 +1,13 @@
 {
   "name": "openapi-for-llms",
-  "version": "0.0.1",
-  "bin": "cli.js",
-  "main": "cli.js",
+  "version": "0.0.2",
+  "bin": {
+    "openapi-for-llms": "./cli.js"
+  },
+  "main": "./cli.js",
+  "files": [
+    "cli.js"
+  ],
   "dependencies": {
     "@trojs/openapi-dereference": "^1.2.0",
     "js-yaml": "^4.1.0"
