@@ -559,9 +559,7 @@ async function runCLI() {
 export { processOpenAPI };
 
 // Run CLI if this file is executed directly
-if (process.argv[1] === new URL(import.meta.url).pathname) {
+if (!!process.argv[1]) {
   console.log("running cli");
   runCLI();
-} else {
-  console.log("no first argv", new URL(import.meta.url).pathname);
 }
