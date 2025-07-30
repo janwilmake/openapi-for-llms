@@ -1,6 +1,6 @@
 {
   "name": "openapi-for-llms",
-  "version": "0.0.9",
+  "version": "0.0.11",
   "type": "module",
   "bin": {
     "openapi-for-llms": "./cli.js"

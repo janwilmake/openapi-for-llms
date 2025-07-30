@@ -264,7 +264,7 @@ function generateLlmsTxt(openapi, openapiFile) {
     content += details.join("\n\n") + "\n\n";
   }
 
-  content += `[Full OpenAPI Spec](${openapiFile})`;
+  content += `[Full OpenAPI Spec](${openapiFile})\n\n`;
 
   // Add sections for each tag (H2 headers)
   const sortedTags = Array.from(tagOperations.keys()).sort();
