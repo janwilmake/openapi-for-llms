@@ -2,8 +2,8 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs";
 import { load, dump } from "js-yaml";
-import { dereferenceSync } from "@trojs/openapi-dereference";
 import { resolve } from "path";
+import { dereferenceSync } from "./deref.js";
 
 /**
  * Fetch external documentation
